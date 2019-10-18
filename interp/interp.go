@@ -158,6 +158,157 @@ func (r *Runner) pattern(word *syntax.Word) string {
 	return str
 }
 
+type ConcRunner []struct {
+	r *Runner
+	isPaused bool
+}
+
+func NewConcRunner(N int, opts ...[]RunnerOption) (*ConcRunner, error) {
+	if len(opts) > N {
+		return nil, fmt.Errorf("options count can't be larger than runners count")
+	}
+
+	runners := make(ConcRunner, N)
+	rI := 0
+	var err error
+
+	// creating runners with options
+	for ; rI < len(opts); rI++ {
+		runners[rI].r, err = New(opts[rI]...)
+		if err != nil {
+			return nil, err
+		}
+		runners[rI].isPaused = false
+		runners[rI].r.parent = &runners
+	}
+	// creating runners without options
+	for ; rI < N; rI++ {
+		runners[rI].r, err = New()
+		if err != nil {
+			return nil, err
+		}
+		runners[rI].isPaused = false
+		runners[rI].r.parent = &runners
+	}
+	return &runners, nil
+}
+
+func (crs ConcRunner) pause(i int) error {
+	if i < 0 || i > cap(crs) {
+		return fmt.Errorf("runner with id %d doesn't exist", i)
+	}
+
+	if crs[i].isPaused {
+		return fmt.Errorf("can't pause already paused runner")
+	}
+
+	cr := crs[i]
+	cr.r.toggleRunner()
+
+	cr.isPaused = true
+	return nil
+}
+
+func (crs ConcRunner) resume(i int) error {
+	if i < 0 || i > cap(crs) {
+		return fmt.Errorf("runner with id %d doesn't exist", i)
+	}
+
+	if !crs[i].isPaused {
+		return fmt.Errorf("can't resume already unpaused runner")
+	}
+
+	cr := crs[i]
+	cr.r.toggleRunner()
+
+	cr.isPaused = false
+	return nil
+}
+
+func (crs ConcRunner) PauseAllExcept(except *Runner) error {
+	// maybe I will make something better than a linear search...
+	// checking if pointer is correct
+	found := -1
+	for i, cr := range crs {
+		if cr.r == except {
+			found = i
+			break
+		}
+	}
+	if found == -1 {
+		return fmt.Errorf("passed Runner pointer not found in ConcRunner")
+	}
+
+	for i := 0; i < found; i++ {
+		err := crs.pause(i)
+		if err != nil {
+			return err
+		}
+	}
+	for i := found + 1; i < len(crs); i++ {
+		err := crs.pause(i)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (crs ConcRunner) ResumeAllExcept(except *Runner) error {
+	// checking if pointer is correct
+	found := -1
+	for i, cr := range crs {
+		if cr.r == except {
+			found = i
+			break
+		}
+	}
+	if found == -1 {
+		return fmt.Errorf("passed Runner pointer not found in ConcRunner")
+	}
+
+	for i := 0; i < found; i++ {
+		err := crs.resume(i)
+		if err != nil {
+			return err
+		}
+	}
+	for i := found + 1; i < len(crs); i++ {
+		err := crs.resume(i)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (crs ConcRunner) RunAll(ctx context.Context, nodes ...syntax.Node) []error {
+	errs := make([]error, len(nodes))
+	errChan := make(chan error, len(errs))
+	rI := 0
+	for _, node := range nodes  {
+		go func(n syntax.Node) {
+			errChan <- crs[rI].r.Run(ctx, node)
+		}(node)
+
+		// TODO: change ConcRunner to a LinkedList to avoid such index checks
+		if rI + 1 < len(crs) {
+			rI++
+		} else {
+			rI = 0
+		}
+	}
+
+	for i := 0; i < len(errChan); i++ {
+		// TODO: should not be errChan but channel of struct that has error and runnerIndex, so we put errors
+		//  in the same order as we received the nodes
+		errs[i] = <-errChan
+	}
+	return errs
+}
+
 // expandEnv exposes Runner's variables to the expand package.
 type expandEnv struct {
 	r *Runner
@@ -344,6 +495,9 @@ type Runner struct {
 
 	Vars  map[string]expand.Variable
 	Funcs map[string]*syntax.Stmt
+
+	// parent is a pointer to ConcRunner
+	parent *ConcRunner
 
 	// execHandler is a function responsible for executing programs. It must be non-nil.
 	execHandler ExecHandlerFunc
@@ -576,9 +730,8 @@ func (r *Runner) Reset() {
 	r.bufCopier.Reader = nil
 }
 
-func (r *Runner) toggleRunner() error {
+func (r *Runner) toggleRunner() {
 	r.runChan <- struct{}{}
-	return nil
 }
 
 func (r *Runner) handlerCtx(ctx context.Context) context.Context {

@@ -6,6 +6,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -3102,6 +3103,38 @@ func TestRunnerEnvNoModify(t *testing.T) {
 	want := "1 2; 1 2; 1 2; "
 	if got := b.String(); got != want {
 		t.Fatalf("\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestNewConcRunner(t *testing.T) {
+	t.Parallel()
+	file1, file2 := parse(t, nil, `echo "test1"`), parse(t, nil, `echo "test2"`)
+
+	var b [2]bytes.Buffer
+	runners, err := NewConcRunner(2,
+		[]RunnerOption{StdIO(nil, &b[0], &b[0])},
+		[]RunnerOption{StdIO(nil, &b[1], &b[1])})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, err := range runners.RunAll(context.TODO(), file1, file2) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	want := [2]string{"test1", "test2"}
+
+	var errBuff strings.Builder
+	for i := 0; i < len(want); i++ {
+		if got := b[i].String(); got != want[i] {
+			fmt.Fprint(&errBuff, "\nwant: %q\ngot: %q\n", want[i], got)
+		}
+	}
+	if errs := errBuff.String(); errs != "" {
+		t.Fatal(errors.New(errs))
 	}
 }
 
