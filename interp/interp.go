@@ -42,6 +42,7 @@ func New(opts ...RunnerOption) (*Runner, error) {
 		usedNew:     true,
 		execHandler: DefaultExecHandler(2 * time.Second),
 		openHandler: DefaultOpenHandler(),
+		runChan: make(chan struct{}, 1),
 	}
 	r.dirStack = r.dirBootstrap[:0]
 	for _, opt := range opts {
@@ -410,6 +411,10 @@ type Runner struct {
 	// For example, this saves an allocation for every shell pipe, since
 	// io.PipeReader does not implement io.WriterTo.
 	bufCopier bufCopier
+
+	// runChan channel controls Runner execution, whenever data is passed,
+	// Runner state is being toggled.
+	runChan chan struct{}
 }
 
 type bufCopier struct {
@@ -571,6 +576,11 @@ func (r *Runner) Reset() {
 	r.bufCopier.Reader = nil
 }
 
+func (r *Runner) toggleRunner() error {
+	r.runChan <- struct{}{}
+	return nil
+}
+
 func (r *Runner) handlerCtx(ctx context.Context) context.Context {
 	hc := HandlerContext{
 		Dir:    r.Dir,
@@ -612,6 +622,11 @@ func (r *Runner) setErr(err error) {
 // Run can be called multiple times synchronously to interpret programs
 // incrementally. To reuse a Runner without keeping the internal shell state,
 // call Reset.
+//
+// Moreover, Run has a concurrency control system for *File by using Runner.runChan.
+// Whenever you call toggle() Runner pauses/resumes execution of statements.
+// Though it is not safe to make it public, as if we toggle the Runner two times and
+// statement is still not parsed, main goroutine will block and wait for resume.
 func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	if !r.didReset {
 		r.Reset()
@@ -1030,7 +1045,15 @@ func elapsedString(d time.Duration, posix bool) string {
 
 func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
 	for _, stmt := range stmts {
-		r.stmt(ctx, stmt)
+		select {
+		case <-r.runChan:
+			// waiting for Resume()
+			<-r.runChan
+
+			r.stmt(ctx, stmt)
+		default:
+			r.stmt(ctx, stmt)
+		}
 	}
 }
 
