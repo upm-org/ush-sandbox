@@ -3108,7 +3108,7 @@ func TestRunnerEnvNoModify(t *testing.T) {
 
 func TestNewConcRunner(t *testing.T) {
 	t.Parallel()
-	file1, file2 := parse(t, nil, `echo "test1"`), parse(t, nil, `echo "test2"`)
+	file1, file2 := parse(t, nil, `echo test1`), parse(t, nil, `echo test2`)
 
 	var b [2]bytes.Buffer
 	runners, err := NewConcRunner(2,
@@ -3119,18 +3119,18 @@ func TestNewConcRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, err := range runners.RunAll(context.TODO(), file1, file2) {
+	for _, err := range runners.RunAll(context.Background(), file1, file2) {
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	want := [2]string{"test1", "test2"}
+	want := [2]string{"test1\n", "test2\n"}
 
 	var errBuff strings.Builder
-	for i := 0; i < len(want); i++ {
-		if got := b[i].String(); got != want[i] {
-			fmt.Fprint(&errBuff, "\nwant: %q\ngot: %q\n", want[i], got)
+	for i, w := range want {
+		if got := b[i].String(); got != w {
+			fmt.Fprintf(&errBuff, "\nwant: %q\ngot: %q\n", w, got)
 		}
 	}
 	if errs := errBuff.String(); errs != "" {

@@ -289,9 +289,9 @@ func (crs ConcRunner) RunAll(ctx context.Context, nodes ...syntax.Node) []error 
 	errChan := make(chan error, len(errs))
 	rI := 0
 	for _, node := range nodes  {
-		go func(n syntax.Node) {
-			errChan <- crs[rI].r.Run(ctx, node)
-		}(node)
+		go func(runner *Runner, n syntax.Node) {
+			errChan <- runner.Run(ctx, n)
+		}(crs[rI].r, node)
 
 		// TODO: change ConcRunner to a LinkedList to avoid such index checks
 		if rI + 1 < len(crs) {
@@ -301,7 +301,7 @@ func (crs ConcRunner) RunAll(ctx context.Context, nodes ...syntax.Node) []error 
 		}
 	}
 
-	for i := 0; i < len(errChan); i++ {
+	for i := range errs {
 		// TODO: should not be errChan but channel of struct that has error and runnerIndex, so we put errors
 		//  in the same order as we received the nodes
 		errs[i] = <-errChan
