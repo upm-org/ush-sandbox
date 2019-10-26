@@ -24,7 +24,7 @@ func isBuiltin(name string) bool {
 		"wait", "builtin", "trap", "type", "source", ".", "command",
 		"dirs", "pushd", "popd", "umask", "alias", "unalias",
 		"fg", "bg", "getopts", "eval", "test", "[", "exec",
-		"return", "read", "shopt":
+		"return", "read", "shopt", "sync":
 		return true
 	}
 	return false
@@ -297,6 +297,22 @@ func (r *Runner) builtinCode(ctx context.Context, pos syntax.Pos, name string, a
 			return 2
 		}
 		return oneIf(r.bashTest(ctx, expr, true) == "")
+	case "sync":
+		if len(args) == 0 {
+			r.keepRedirs = true
+			break
+		}
+		if err := r.msgPauseOthers(); r.asyncMode && err != nil {
+			r.errf("sync: %s", err)
+			return 1
+		}
+		r.exec(ctx, args)
+		if err := r.msgResumeOthers(); r.asyncMode && err != nil {
+			r.errf("sync: %s", err)
+			return 1
+		}
+		r.exitShell = true
+		return r.exit
 	case "exec":
 		// TODO: Consider syscall.Exec, i.e. actually replacing
 		// the process. It's in theory what a shell should do,

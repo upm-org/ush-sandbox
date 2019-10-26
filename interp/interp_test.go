@@ -3106,12 +3106,50 @@ func TestRunnerEnvNoModify(t *testing.T) {
 	}
 }
 
-func TestNewConcRunner(t *testing.T) {
+func TestNewRunnersManager(t *testing.T) {
 	t.Parallel()
 	file1, file2 := parse(t, nil, `echo test1`), parse(t, nil, `echo test2`)
 
 	var b [2]bytes.Buffer
-	runners, err := NewConcRunner(2,
+	runners, err := NewRunnersManager(2,
+		[]RunnerOption{StdIO(nil, &b[0], &b[0])},
+		[]RunnerOption{StdIO(nil, &b[1], &b[1])})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, err := range runners.RunAll(context.Background(), file1, file2) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	want := [2]string{"test1\n", "test2\n"}
+
+	var errBuff strings.Builder
+	for i, w := range want {
+		if got := b[i].String(); got != w {
+			fmt.Fprintf(&errBuff, "\nwant: %q\ngot: %q\n", w, got)
+		}
+	}
+	if errs := errBuff.String(); errs != "" {
+		t.Fatal(errors.New(errs))
+	}
+}
+
+func TestRunnersManager_RunAll(t *testing.T) {
+	t.Parallel()
+	file1 := parse(t, nil, `
+echo "f1_async1";
+echo "f1_async2";
+sync echo "f1_SYNC"`)
+	file2 := parse(t, nil, `
+echo "f2_async1";
+echo "f2_async2";
+sync echo "f2_SYNC"`)
+	var b [2]bytes.Buffer
+	runners, err := NewRunnersManager(2,
 		[]RunnerOption{StdIO(nil, &b[0], &b[0])},
 		[]RunnerOption{StdIO(nil, &b[1], &b[1])})
 

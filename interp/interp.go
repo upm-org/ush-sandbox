@@ -158,95 +158,136 @@ func (r *Runner) pattern(word *syntax.Word) string {
 	return str
 }
 
-type ConcRunner []struct {
-	r *Runner
-	isPaused bool
+// RunnerMsg tells RunnersManager what to do with runners.
+// We need to pass an id as well to know which runner is communicating
+// with Manager.
+type RunnerMsg struct {
+	id     int
+	signal int
 }
 
-func NewConcRunner(N int, opts ...[]RunnerOption) (*ConcRunner, error) {
-	if len(opts) > N {
-		return nil, fmt.Errorf("options count can't be larger than runners count")
+type RunnerErr struct {
+	id  int
+	err error
+}
+
+func (rErr RunnerErr) Error() string {
+	return fmt.Sprintf("Runner %d: %s", rErr.id, rErr.err)
+}
+
+func (r *Runner) msg(sig int) error {
+	r.msgChan <- RunnerMsg{r.id, sig}
+	return <-r.msgErrChan
+}
+
+func (r *Runner) msgPauseOthers() error {
+	return r.msg(sigPauseOthers)
+}
+
+func (r *Runner) msgResumeOthers() error {
+	return r.msg(sigResumeOthers)
+}
+
+func (r *Runner) Pause() error {
+	if !r.isRunning {
+		return fmt.Errorf("can't pause a paused runner")
 	}
 
-	runners := make(ConcRunner, N)
-	rI := 0
-	var err error
+	r.toggleRunner()
 
+	r.isRunning = false
+	return nil
+}
+
+func (r *Runner) Resume() error {
+	if !r.isRunning {
+		return fmt.Errorf("can't resume a running runner")
+	}
+
+	r.toggleRunner()
+
+	r.isRunning = true
+	return nil
+}
+
+// RunnersManager controls flow of Runners
+type RunnersManager struct {
+	runners     []*Runner
+	msgReceiver chan RunnerMsg
+}
+
+const (
+	sigPauseOthers = iota
+	sigResumeOthers
+)
+
+func (rm *RunnersManager) boundsCheck(id int) error {
+	if id < 0 || id > cap(rm.runners) {
+		return fmt.Errorf("runner with id %d doesn't exist", id)
+	}
+	return nil
+}
+
+func NewRunnersManager(N int, opts ...[]RunnerOption) (*RunnersManager, error) {
+	if len(opts) > N {
+		return nil, fmt.Errorf("options length can't be larger than runners length")
+	}
+
+	rm := &RunnersManager{
+		make([]*Runner, N),
+		make(chan RunnerMsg),
+	}
+
+	rI := 0
 	// creating runners with options
 	for ; rI < len(opts); rI++ {
-		runners[rI].r, err = New(opts[rI]...)
+		opts[rI] = append(opts[rI], Async(rI, rm.msgReceiver))
+		r, err := New(opts[rI]...)
 		if err != nil {
 			return nil, err
 		}
-		runners[rI].isPaused = false
-		runners[rI].r.parent = &runners
+		rm.runners[rI] = r
 	}
 	// creating runners without options
 	for ; rI < N; rI++ {
-		runners[rI].r, err = New()
+		r, err := New(Async(rI, rm.msgReceiver))
 		if err != nil {
 			return nil, err
 		}
-		runners[rI].isPaused = false
-		runners[rI].r.parent = &runners
+		rm.runners[rI] = r
 	}
-	return &runners, nil
+	return rm, nil
 }
 
-func (crs ConcRunner) pause(i int) error {
-	if i < 0 || i > cap(crs) {
-		return fmt.Errorf("runner with id %d doesn't exist", i)
+func (rm *RunnersManager) pause(i int) error {
+	if err := rm.boundsCheck(i); err != nil {
+		return err
 	}
 
-	if crs[i].isPaused {
-		return fmt.Errorf("can't pause already paused runner")
-	}
-
-	cr := crs[i]
-	cr.r.toggleRunner()
-
-	cr.isPaused = true
-	return nil
+	return rm.runners[i].Pause()
 }
 
-func (crs ConcRunner) resume(i int) error {
-	if i < 0 || i > cap(crs) {
-		return fmt.Errorf("runner with id %d doesn't exist", i)
+func (rm *RunnersManager) resume(i int) error {
+	if err := rm.boundsCheck(i); err != nil {
+		return err
 	}
 
-	if !crs[i].isPaused {
-		return fmt.Errorf("can't resume already unpaused runner")
-	}
-
-	cr := crs[i]
-	cr.r.toggleRunner()
-
-	cr.isPaused = false
-	return nil
+	return rm.runners[i].Resume()
 }
 
-func (crs ConcRunner) PauseAllExcept(except *Runner) error {
-	// maybe I will make something better than a linear search...
-	// checking if pointer is correct
-	found := -1
-	for i, cr := range crs {
-		if cr.r == except {
-			found = i
-			break
-		}
-	}
-	if found == -1 {
-		return fmt.Errorf("passed Runner pointer not found in ConcRunner")
+func (rm *RunnersManager) PauseAllExcept(exceptId int) error {
+	if err := rm.boundsCheck(exceptId); err != nil {
+		return err
 	}
 
-	for i := 0; i < found; i++ {
-		err := crs.pause(i)
+	for i := 0; i < exceptId; i++ {
+		err := rm.pause(i)
 		if err != nil {
 			return err
 		}
 	}
-	for i := found + 1; i < len(crs); i++ {
-		err := crs.pause(i)
+	for i := exceptId + 1; i < len(rm.runners); i++ {
+		err := rm.pause(i)
 		if err != nil {
 			return err
 		}
@@ -255,27 +296,19 @@ func (crs ConcRunner) PauseAllExcept(except *Runner) error {
 	return nil
 }
 
-func (crs ConcRunner) ResumeAllExcept(except *Runner) error {
-	// checking if pointer is correct
-	found := -1
-	for i, cr := range crs {
-		if cr.r == except {
-			found = i
-			break
-		}
-	}
-	if found == -1 {
-		return fmt.Errorf("passed Runner pointer not found in ConcRunner")
+func (rm *RunnersManager) ResumeAllExcept(exceptId int) error {
+	if err := rm.boundsCheck(exceptId); err != nil {
+		return err
 	}
 
-	for i := 0; i < found; i++ {
-		err := crs.resume(i)
+	for i := 0; i < exceptId; i++ {
+		err := rm.resume(i)
 		if err != nil {
 			return err
 		}
 	}
-	for i := found + 1; i < len(crs); i++ {
-		err := crs.resume(i)
+	for i := exceptId + 1; i < len(rm.runners); i++ {
+		err := rm.resume(i)
 		if err != nil {
 			return err
 		}
@@ -284,28 +317,49 @@ func (crs ConcRunner) ResumeAllExcept(except *Runner) error {
 	return nil
 }
 
-func (crs ConcRunner) RunAll(ctx context.Context, nodes ...syntax.Node) []error {
+func (rm *RunnersManager) msgHandler(msg RunnerMsg) {
+	switch msg.signal {
+	case sigPauseOthers:
+		if err := rm.PauseAllExcept(msg.id); err != nil {
+			rm.runners[msg.id].msgErrChan <- err
+		}
+		rm.runners[msg.id].msgErrChan <- nil
+	case sigResumeOthers:
+		if err := rm.ResumeAllExcept(msg.id); err != nil {
+			rm.runners[msg.id].msgErrChan <- err
+		}
+		rm.runners[msg.id].msgErrChan <- nil
+	}
+}
+
+func (rm *RunnersManager) RunAll(ctx context.Context, nodes ...syntax.Node) []error {
+	finished := 0
 	errs := make([]error, len(nodes))
-	errChan := make(chan error, len(errs))
+	errChan := make(chan RunnerErr, len(errs))
 	rI := 0
 	for _, node := range nodes  {
-		go func(runner *Runner, n syntax.Node) {
-			errChan <- runner.Run(ctx, n)
-		}(crs[rI].r, node)
+		go func(i int, n syntax.Node) {
+			errChan <- RunnerErr{i, rm.runners[i].Run(ctx, n)}
+		}(rI, node)
 
-		// TODO: change ConcRunner to a LinkedList to avoid such index checks
-		if rI + 1 < len(crs) {
+		// TODO: change crs to a LinkedList to avoid such index checks
+		if rI + 1 < len(rm.runners) {
 			rI++
 		} else {
 			rI = 0
 		}
 	}
 
-	for i := range errs {
-		// TODO: should not be errChan but channel of struct that has error and runnerIndex, so we put errors
-		//  in the same order as we received the nodes
-		errs[i] = <-errChan
+	for finished < len(nodes) {
+		select {
+			case cRErr := <- errChan:
+				errs[cRErr.id] = cRErr.err
+				finished++
+			case cRMsg := <- rm.msgReceiver:
+				rm.msgHandler(cRMsg)
+		}
 	}
+
 	return errs
 }
 
@@ -331,6 +385,16 @@ func (e expandEnv) Each(fn func(name string, vr expand.Variable) bool) {
 		if !fn(name, vr) {
 			return
 		}
+	}
+}
+
+// Async sets Runner to async mode
+func Async(id int, controlChan chan<- RunnerMsg) RunnerOption {
+	return func(r *Runner) error {
+		r.id = id
+		r.asyncMode = true
+		r.msgChan = controlChan
+		return nil
 	}
 }
 
@@ -496,9 +560,6 @@ type Runner struct {
 	Vars  map[string]expand.Variable
 	Funcs map[string]*syntax.Stmt
 
-	// parent is a pointer to ConcRunner
-	parent *ConcRunner
-
 	// execHandler is a function responsible for executing programs. It must be non-nil.
 	execHandler ExecHandlerFunc
 
@@ -566,9 +627,26 @@ type Runner struct {
 	// io.PipeReader does not implement io.WriterTo.
 	bufCopier bufCopier
 
-	// runChan channel controls Runner execution, whenever data is passed,
+	// asyncMode marks if Runner is about to run concurrently. Consider that
+	// by default as it is false - scripts run in sync mode.
+	asyncMode bool
+
+	// runChan channel controls Runner execution, whenever msg is passed,
 	// Runner state is being toggled.
 	runChan chan struct{}
+
+	// msgChan channel sends signals to RunnersManager, in order to pause
+	// and resume other Runners.
+	msgChan chan<- RunnerMsg
+
+	// errSig channel receives errors after sending a msg.
+	msgErrChan chan error
+
+	// Id of the Runner.
+	id int
+
+	// State of the Runner.
+	isRunning bool
 }
 
 type bufCopier struct {
@@ -776,7 +854,7 @@ func (r *Runner) setErr(err error) {
 // incrementally. To reuse a Runner without keeping the internal shell state,
 // call Reset.
 //
-// Moreover, Run has a concurrency control system for *File by using Runner.runChan.
+// Moreover, Run has a concurrency msgReceiver system for *File by using Runner.runChan.
 // Whenever you call toggle() Runner pauses/resumes execution of statements.
 // Though it is not safe to make it public, as if we toggle the Runner two times and
 // statement is still not parsed, main goroutine will block and wait for resume.
