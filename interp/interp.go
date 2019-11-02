@@ -6,6 +6,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -42,7 +43,6 @@ func New(opts ...RunnerOption) (*Runner, error) {
 		usedNew:     true,
 		execHandler: DefaultExecHandler(2 * time.Second),
 		openHandler: DefaultOpenHandler(),
-		runChan: make(chan struct{}, 1),
 	}
 	r.dirStack = r.dirBootstrap[:0]
 	for _, opt := range opts {
@@ -188,32 +188,16 @@ func (r *Runner) msgResumeOthers() error {
 	return r.msg(sigResumeOthers)
 }
 
-func (r *Runner) Pause() error {
-	if !r.isRunning {
-		return fmt.Errorf("can't pause a paused runner")
-	}
-
-	r.toggleRunner()
-
-	r.isRunning = false
-	return nil
-}
-
-func (r *Runner) Resume() error {
-	if !r.isRunning {
-		return fmt.Errorf("can't resume a running runner")
-	}
-
-	r.toggleRunner()
-
-	r.isRunning = true
-	return nil
+type ContextAndCancel struct {
+	context.Context
+	context.CancelFunc
 }
 
 // RunnersManager controls flow of Runners
 type RunnersManager struct {
-	runners     []*Runner
-	msgReceiver chan RunnerMsg
+	runners            []*Runner
+	cancelableContexts []ContextAndCancel
+	msgReceiver        chan RunnerMsg
 }
 
 const (
@@ -222,7 +206,7 @@ const (
 )
 
 func (rm *RunnersManager) boundsCheck(id int) error {
-	if id < 0 || id > cap(rm.runners) {
+	if id < 0 || id > cap(rm.cancelableContexts) {
 		return fmt.Errorf("runner with id %d doesn't exist", id)
 	}
 	return nil
@@ -234,8 +218,8 @@ func NewRunnersManager(N int, opts ...[]RunnerOption) (*RunnersManager, error) {
 	}
 
 	rm := &RunnersManager{
-		make([]*Runner, N),
-		make(chan RunnerMsg),
+		runners:     make([]*Runner, N),
+		msgReceiver: make(chan RunnerMsg),
 	}
 
 	rI := 0
@@ -259,21 +243,9 @@ func NewRunnersManager(N int, opts ...[]RunnerOption) (*RunnersManager, error) {
 	return rm, nil
 }
 
-func (rm *RunnersManager) pause(i int) error {
-	if err := rm.boundsCheck(i); err != nil {
-		return err
-	}
-
-	return rm.runners[i].Pause()
-}
-
-func (rm *RunnersManager) resume(i int) error {
-	if err := rm.boundsCheck(i); err != nil {
-		return err
-	}
-
-	return rm.runners[i].Resume()
-}
+var (
+	closedCtxErr = errors.New("context closed")
+)
 
 func (rm *RunnersManager) PauseAllExcept(exceptId int) error {
 	if err := rm.boundsCheck(exceptId); err != nil {
@@ -281,15 +253,27 @@ func (rm *RunnersManager) PauseAllExcept(exceptId int) error {
 	}
 
 	for i := 0; i < exceptId; i++ {
-		err := rm.pause(i)
-		if err != nil {
-			return err
+		ctx := rm.cancelableContexts[i].Context
+		select {
+		case <-ctx.Done():
+			return closedCtxErr
+		default:
+			err := ctx.(asyncable).Pause()
+			if err != nil {
+				return err
+			}
 		}
 	}
-	for i := exceptId + 1; i < len(rm.runners); i++ {
-		err := rm.pause(i)
-		if err != nil {
-			return err
+	for i := exceptId + 1; i < len(rm.cancelableContexts); i++ {
+		ctx := rm.cancelableContexts[i].Context
+		select {
+		case <-ctx.Done():
+			return closedCtxErr
+		default:
+			err := ctx.(asyncable).Pause()
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -300,17 +284,28 @@ func (rm *RunnersManager) ResumeAllExcept(exceptId int) error {
 	if err := rm.boundsCheck(exceptId); err != nil {
 		return err
 	}
-
 	for i := 0; i < exceptId; i++ {
-		err := rm.resume(i)
-		if err != nil {
-			return err
+		ctx := rm.cancelableContexts[i].Context
+		select {
+		case <-ctx.Done():
+			return closedCtxErr
+		default:
+			err := ctx.(asyncable).Unpause()
+			if err != nil {
+				return err
+			}
 		}
 	}
-	for i := exceptId + 1; i < len(rm.runners); i++ {
-		err := rm.resume(i)
-		if err != nil {
-			return err
+	for i := exceptId + 1; i < len(rm.cancelableContexts); i++ {
+		ctx := rm.cancelableContexts[i].Context
+		select {
+		case <-ctx.Done():
+			return closedCtxErr
+		default:
+			err := ctx.(asyncable).Unpause()
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -318,17 +313,15 @@ func (rm *RunnersManager) ResumeAllExcept(exceptId int) error {
 }
 
 func (rm *RunnersManager) msgHandler(msg RunnerMsg) {
-	switch msg.signal {
-	case sigPauseOthers:
-		if err := rm.PauseAllExcept(msg.id); err != nil {
-			rm.runners[msg.id].msgErrChan <- err
-		}
-		rm.runners[msg.id].msgErrChan <- nil
-	case sigResumeOthers:
-		if err := rm.ResumeAllExcept(msg.id); err != nil {
-			rm.runners[msg.id].msgErrChan <- err
-		}
-		rm.runners[msg.id].msgErrChan <- nil
+	router := map[int]func(int) error{
+		sigPauseOthers:  rm.PauseAllExcept,
+		sigResumeOthers: rm.ResumeAllExcept,
+	}
+
+	if handler, exists := router[msg.signal]; !exists {
+		panic("unknown message signal")
+	} else {
+		rm.runners[msg.id].msgErrChan <- handler(msg.id)
 	}
 }
 
@@ -336,27 +329,33 @@ func (rm *RunnersManager) RunAll(ctx context.Context, nodes ...syntax.Node) []er
 	finished := 0
 	errs := make([]error, len(nodes))
 	errChan := make(chan RunnerErr, len(errs))
+	rm.cancelableContexts = make([]ContextAndCancel, len(rm.runners))
 	rI := 0
-	for _, node := range nodes  {
-		go func(i int, n syntax.Node) {
-			errChan <- RunnerErr{i, rm.runners[i].Run(ctx, n)}
-		}(rI, node)
+	for _, node := range nodes {
+		actx, cancelFunc := WithAsync(ctx)
+		go func(_ctx context.Context, i int, n syntax.Node) {
+			errChan <- RunnerErr{i, rm.runners[i].Run(_ctx, n)}
+		}(actx, rI, node)
 
-		// TODO: change crs to a LinkedList to avoid such index checks
-		if rI + 1 < len(rm.runners) {
+		rm.cancelableContexts[rI] = ContextAndCancel{actx, cancelFunc}
+
+		if rI+1 < len(rm.runners) {
 			rI++
 		} else {
 			rI = 0
 		}
 	}
 
+	//fmt.Printf("outside: %p\n", rm.msgReceiver)
+
 	for finished < len(nodes) {
 		select {
-			case cRErr := <- errChan:
-				errs[cRErr.id] = cRErr.err
-				finished++
-			case cRMsg := <- rm.msgReceiver:
-				rm.msgHandler(cRMsg)
+		case cRErr := <-errChan:
+			errs[cRErr.id] = cRErr.err
+			rm.cancelableContexts[cRErr.id].CancelFunc()
+			finished++
+		case cRMsg := <-rm.msgReceiver:
+			rm.msgHandler(cRMsg)
 		}
 	}
 
@@ -393,7 +392,9 @@ func Async(id int, controlChan chan<- RunnerMsg) RunnerOption {
 	return func(r *Runner) error {
 		r.id = id
 		r.asyncMode = true
+		r.execHandler = DefaultAsyncExecHandler(2 * time.Second)
 		r.msgChan = controlChan
+		r.msgErrChan = make(chan error)
 		return nil
 	}
 }
@@ -631,10 +632,6 @@ type Runner struct {
 	// by default as it is false - scripts run in sync mode.
 	asyncMode bool
 
-	// runChan channel controls Runner execution, whenever msg is passed,
-	// Runner state is being toggled.
-	runChan chan struct{}
-
 	// msgChan channel sends signals to RunnersManager, in order to pause
 	// and resume other Runners.
 	msgChan chan<- RunnerMsg
@@ -644,9 +641,6 @@ type Runner struct {
 
 	// Id of the Runner.
 	id int
-
-	// State of the Runner.
-	isRunning bool
 }
 
 type bufCopier struct {
@@ -768,6 +762,10 @@ func (r *Runner) Reset() {
 		dirStack:  r.dirStack[:0],
 		usedNew:   r.usedNew,
 		bufCopier: r.bufCopier,
+
+		msgChan:    r.msgChan,
+		msgErrChan: r.msgErrChan,
+		id:         r.id,
 	}
 	if r.Vars == nil {
 		r.Vars = make(map[string]expand.Variable)
@@ -806,10 +804,6 @@ func (r *Runner) Reset() {
 	r.dirStack = append(r.dirStack, r.Dir)
 	r.didReset = true
 	r.bufCopier.Reader = nil
-}
-
-func (r *Runner) toggleRunner() {
-	r.runChan <- struct{}{}
 }
 
 func (r *Runner) handlerCtx(ctx context.Context) context.Context {
@@ -1276,15 +1270,7 @@ func elapsedString(d time.Duration, posix bool) string {
 
 func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
 	for _, stmt := range stmts {
-		select {
-		case <-r.runChan:
-			// waiting for Resume()
-			<-r.runChan
-
-			r.stmt(ctx, stmt)
-		default:
-			r.stmt(ctx, stmt)
-		}
+		r.stmt(ctx, stmt)
 	}
 }
 

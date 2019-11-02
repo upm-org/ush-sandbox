@@ -83,7 +83,6 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			Stdout: hc.Stdout,
 			Stderr: hc.Stderr,
 		}
-
 		err = cmd.Start()
 		if err == nil {
 			if done := ctx.Done(); done != nil {
@@ -263,6 +262,15 @@ func pathExts(env expand.Environ) []string {
 		exts = append(exts, e)
 	}
 	return exts
+}
+
+func DefaultAsyncExecHandler(killTimeout time.Duration) ExecHandlerFunc {
+	return func(ctx context.Context, args []string) error {
+		if a, ok := ctx.(asyncable); ok {
+			a.Wait()
+		}
+		return DefaultExecHandler(killTimeout)(ctx, args)
+	}
 }
 
 // OpenHandlerFunc is a handler which opens files. It is
