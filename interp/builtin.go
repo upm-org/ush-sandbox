@@ -6,15 +6,14 @@ package interp
 import (
 	"context"
 	"fmt"
+	"github.com/upm-org/ush/expand"
+	"github.com/upm-org/ush/syntax"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"mvdan.cc/sh/v3/expand"
-	"mvdan.cc/sh/v3/syntax"
 )
 
 func isBuiltin(name string) bool {
@@ -302,15 +301,9 @@ func (r *Runner) builtinCode(ctx context.Context, pos syntax.Pos, name string, a
 			r.keepRedirs = true
 			break
 		}
-		if err := r.msgPauseOthers(); r.asyncMode && err != nil {
-			r.errf("sync: %s", err)
-			return 1
-		}
+		r.Lock()
 		r.exec(ctx, args)
-		if err := r.msgResumeOthers(); r.asyncMode && err != nil {
-			r.errf("sync: %s", err)
-			return 1
-		}
+		r.Unlock()
 		r.exitShell = true
 		return r.exit
 	case "exec":

@@ -20,10 +20,10 @@ Go 1.11 and later can download the latest v2 stable release:
 
 	cd $(mktemp -d); go mod init tmp; go get mvdan.cc/sh/cmd/shfmt
 
-The latest v3 pre-release can be downloaded in a similar manner, using the `/v3`
+The latest v3 pre-release can be downloaded in a similar manner, using next
 module:
 
-	cd $(mktemp -d); go mod init tmp; go get mvdan.cc/sh/v3/cmd/shfmt
+	cd $(mktemp -d); go mod init tmp; go get github.com/upm-org/ush/cmd/shfmt
 
 Finally, any older release can be built with their respective older Go versions
 by manually cloning, checking out a tag, and running `go build ./cmd/shfmt`.
@@ -68,9 +68,22 @@ $ echo 'foo=(1 2)' | shfmt -p
 
 ### gosh
 
-	cd $(mktemp -d); go mod init tmp; go get mvdan.cc/sh/v3/cmd/gosh
+	cd $(mktemp -d); go mod init tmp; go get github.com/upm-org/ush/cmd/gosh
 
-Experimental shell that uses `interp`. Work in progress, so don't expect
+Experimental shell that uses `interp`. 
+Includes concurrent mode with `sync` keyword.
+```sh
+gosh -a async.sh,async.sh
+```
+
+async.sh:
+```sh
+echo "Hello from async.sh!"
+sync sleep 1
+```
+
+This will echo 2 times and actually wait for two seconds, not one.
+Work in progress, so don't expect
 stability just yet.
 
 ### Fuzzing

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"testing"
 
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/upm-org/ush/syntax"
 )
 
 func lit(s string) *syntax.Lit                { return &syntax.Lit{Value: s} }

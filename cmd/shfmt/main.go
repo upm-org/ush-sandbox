@@ -17,8 +17,8 @@ import (
 	"github.com/pkg/diff"
 	"golang.org/x/crypto/ssh/terminal"
 
-	"mvdan.cc/sh/v3/fileutil"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/upm-org/ush/fileutil"
+	"github.com/upm-org/ush/syntax"
 )
 
 var (

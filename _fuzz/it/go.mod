@@ -2,7 +2,7 @@ module local.tld/fuzz
 
 go 1.13
 
-replace mvdan.cc/sh/v3 => ./../..
+replace github.com/upm-org/ush => ./../..
 
 require (
 	cloud.google.com/go v0.47.0 // indirect
@@ -33,5 +33,4 @@ require (
 	google.golang.org/api v0.11.0 // indirect
 	google.golang.org/appengine v1.6.5 // indirect
 	google.golang.org/grpc v1.24.0 // indirect
-	mvdan.cc/sh/v3 v3.0.0-00010101000000-000000000000
 )

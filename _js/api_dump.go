@@ -45,7 +45,7 @@ type DocType struct {
 
 func main() {
 	cfg := &packages.Config{Mode: packages.LoadSyntax}
-	pkgs, err := packages.Load(cfg, "mvdan.cc/sh/v3/syntax")
+	pkgs, err := packages.Load(cfg, "github.com/upm-org/ush/syntax")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

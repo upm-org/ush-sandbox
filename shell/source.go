@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"os"
 
-	"mvdan.cc/sh/v3/expand"
-	"mvdan.cc/sh/v3/interp"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/upm-org/ush/expand"
+	"github.com/upm-org/ush/interp"
+	"github.com/upm-org/ush/syntax"
 )
 
 // SourceFile sources a shell file from disk and returns the variables

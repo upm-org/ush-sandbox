@@ -15,7 +15,7 @@ import (
 
 	"github.com/rogpeppe/go-internal/testscript"
 
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/upm-org/ush/syntax"
 )
 
 func init() {

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/upm-org/ush/syntax"
 )
 
 func blacklistBuiltinExec(name string) ExecHandlerFunc {

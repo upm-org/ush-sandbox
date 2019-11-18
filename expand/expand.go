@@ -15,8 +15,8 @@ import (
 	"strconv"
 	"strings"
 
-	"mvdan.cc/sh/v3/pattern"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/upm-org/ush/pattern"
+	"github.com/upm-org/ush/syntax"
 )
 
 // A Config specifies details about how shell expansion should be performed. The

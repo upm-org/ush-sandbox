@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"mvdan.cc/sh/v3/expand"
+	"github.com/upm-org/ush/expand"
 )
 
 // HandlerCtx returns HandlerContext value stored in ctx.
@@ -266,9 +266,9 @@ func pathExts(env expand.Environ) []string {
 
 func DefaultAsyncExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 	return func(ctx context.Context, args []string) error {
-		if a, ok := ctx.(asyncable); ok {
+		/*if a, ok := ctx.(asyncable); ok {
 			a.Wait()
-		}
+		}*/
 		return DefaultExecHandler(killTimeout)(ctx, args)
 	}
 }

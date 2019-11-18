@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"mvdan.cc/sh/v3/expand"
-	"mvdan.cc/sh/v3/interp"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/upm-org/ush/expand"
+	"github.com/upm-org/ush/interp"
+	"github.com/upm-org/ush/syntax"
 )
 
 func Example() {

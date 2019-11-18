@@ -12,8 +12,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"mvdan.cc/sh/v3/pattern"
-	"mvdan.cc/sh/v3/syntax"
+	"github.com/upm-org/ush/pattern"
+	"github.com/upm-org/ush/syntax"
 )
 
 func nodeLit(node syntax.Node) string {
