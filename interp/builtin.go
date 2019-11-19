@@ -297,14 +297,9 @@ func (r *Runner) builtinCode(ctx context.Context, pos syntax.Pos, name string, a
 		}
 		return oneIf(r.bashTest(ctx, expr, true) == "")
 	case "sync":
-		if len(args) == 0 {
-			r.keepRedirs = true
-			break
-		}
 		r.Lock()
-		r.exec(ctx, args)
+		r.call(ctx, pos, args)
 		r.Unlock()
-		r.exitShell = true
 		return r.exit
 	case "exec":
 		// TODO: Consider syscall.Exec, i.e. actually replacing
